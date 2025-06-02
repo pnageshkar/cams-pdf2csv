@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+
+# VS Code
+.vscode/
+*.code-workspace
+
+# Virtual Environment
+venv/
+.env/
+.venv/
+
+# Generated files
+generated_csvs/
+*.spec
+
+# Operating System
+.DS_Store
+Thumbs.db
