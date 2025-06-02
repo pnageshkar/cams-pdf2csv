@@ -21,6 +21,9 @@ venv/
 generated_csvs/
 *.csv
 
+# Backup files
+backups/
+
 # PyInstaller
 build/
 dist/

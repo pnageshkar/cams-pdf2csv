@@ -1,18 +1,16 @@
 import os
 import sys
 import traceback
-import threading  # Import the threading module
-from datetime import datetime  # For generating unique filenames
-from tkinter import (
-    filedialog,
-    messagebox,
-)  # Import filedialog for the 'open file' dialog
-import customtkinter as ctk  # Import the CustomTkinter library
+import threading
+from datetime import datetime
+from pathlib import Path
+from tkinter import filedialog, messagebox
+import customtkinter as ctk
 
-# To check if running as a script or bundled app
-# --- Import your PDF parsing functions ---
-# Make sure cams_parser.py is in the same directory as gui_app.py
-# or adjust the import path accordingly if it's in a sub-module.
+# Set appearance mode and color theme
+ctk.set_appearance_mode("dark")  # Modes: "System" (standard), "Dark", "Light"
+ctk.set_default_color_theme("blue")  # Themes: "blue" (standard), "green", "dark-blue"
+
 try:
     from cams_parser import extract_transactions_from_pdf, convert_to_csv_string
 except ImportError:
@@ -20,226 +18,309 @@ except ImportError:
         "Import Error",
         "Could not import 'cams_parser.py'. Make sure it's in the same directory.",
     )
-    sys.exit()  # Exit if the parser can't be imported
+    sys.exit()
 
 
-# --- Main Application Class (Optional but good practice for larger GUIs) ---
-# For now, we'll keep it simple and build directly.
-# If the app grows, encapsulating it in a class is better.
+class CAMSProcessorApp:
+    def __init__(self):
+        self.root = ctk.CTk()
+        self.root.title("CAMS PDF Statement Processor")
+        self.setup_window_geometry("800x600")  # Increased window size
+        self.root.resizable(True, True)
 
-# --- GUI Setup ---
-# Set the appearance mode and default color theme for CustomTkinter.
-# "System" will adapt to the user's OS theme (light/dark).
-# Other modes: "Light", "Dark"
-ctk.set_appearance_mode("System")
-# Other themes: "green", "dark-blue"
-ctk.set_default_color_theme("blue")
+        # Configure grid weights for responsive design
+        self.root.grid_columnconfigure(0, weight=1)
+        self.root.grid_rowconfigure(0, weight=1)
 
-# Create the main application window (often called 'app' or 'root')
-app = ctk.CTk()
-app.title("CAMS PDF Statement Processor")  # Set the title of the window
-app.geometry("600x350")  # Set the initial size of the window (width x height)
+        # Variables
+        self.selected_file = ctk.StringVar()
+        self.password = ctk.StringVar()
+        self.status_text = ctk.StringVar(value="Ready to process PDF statements")
 
-# --- Global variable to store the selected file path ---
-# We use a CTkinter StringVar so the Entry widget can be easily updated
-selected_pdf_path_var = ctk.StringVar()
-status_message_var = ctk.StringVar(value="Status: Ready")  # Initialize status message
-
-# --- Define output directory ---
-# Get the directory where the script (or executable) is running
-if getattr(sys, "frozen", False):  # Running as a bundled app (e.g., PyInstaller)
-    application_path = os.path.dirname(sys.executable)
-else:  # Running as a normal script
-    application_path = os.path.dirname(__file__)
-
-GENERATED_CSVS_FOLDER = os.path.join(application_path, "generated_csvs")
-os.makedirs(GENERATED_CSVS_FOLDER, exist_ok=True)  # Ensure the folder exists
-
-
-# --- Event Handler Functions ---
-def browse_file():
-    """
-    Opens a file dialog for the user to select a PDF file.
-    Updates the file path entry field with the selected file.
-    """
-    # askopenfilename opens the "Open file" dialog
-    # filetypes limits the displayed files to PDF and All files
-    # initialdir can be set to a default directory, e.g., os.path.expanduser("~") for home
-    file_path = filedialog.askopenfilename(
-        title="Select PDF Statement File",
-        filetypes=(("PDF files", "*.pdf"), ("All files", "*.*")),
-    )
-    if file_path:  # If the user selected a file (and didn't cancel)
-        selected_pdf_path_var.set(
-            file_path
-        )  # Update the StringVar, which updates the Entry widget
-        status_message_var.set(
-            f"File: {os.path.basename(file_path)}"
-        )  # Update status message with the selected file name
-    else:
-        if selected_pdf_path_var.get():
-            selected_pdf_path_var.set("")  # Clear the entry if no file was selected
-        status_message_var.set("Status: No file selected.")  # Update status message
-
-
-def actual_pdf_processing_task(pdf_file_path, pdf_password):
-    """
-    This function contains the long-running PDF processing logic.
-    It will be executed in a separate thread.
-    It returns the processed data (list of dicts) and a status message.
-    CSV string conversion and saving will be handled after this in the GUI thread..
-    """
-    try:
-        # extract_transactions_from_pdf now returns (list_of_data, status_message)
-        processed_data, status_msg_from_parser = extract_transactions_from_pdf(
-            pdf_file_path, pdf_password
-        )
-
-        if status_msg_from_parser == "Success" and processed_data:
-            csv_string_content = convert_to_csv_string(processed_data)
-            if not csv_string_content:
-                return None, "Error: Failed to generate CSV content."  # Return error
-
-            now = datetime.now()
-            timestamp_str = now.strftime("%d%m%Y_%H_%M_%S")
-            base_pdf_name = os.path.splitext(os.path.basename(pdf_file_path))[0]
-            safe_base_pdf_name = "".join(
-                c if c.isalnum() else "_" for c in base_pdf_name
-            )
-            csv_filename_only = f"{safe_base_pdf_name}_transactions_{timestamp_str}.csv"
-            csv_filepath_on_server = os.path.join(
-                GENERATED_CSVS_FOLDER, csv_filename_only
-            )
-
-            with open(csv_filepath_on_server, "w", encoding="utf-8", newline="") as f:
-                f.write(csv_string_content)
-
-            return csv_filepath_on_server, "Success"  # Return path and success
+        # Output directory setup
+        if getattr(sys, "frozen", False):
+            self.application_path = os.path.dirname(sys.executable)
         else:
-            return None, status_msg_from_parser  # Return error from parser
+            self.application_path = os.path.dirname(__file__)
 
-    except Exception as e:
-        print(
-            "--- UNEXPECTED ERROR IN actual_pdf_processing_task (background thread) ---"
+        self.GENERATED_CSVS_FOLDER = os.path.join(
+            self.application_path, "generated_csvs"
         )
-        traceback.print_exc()
-        print("-----------------------------------------------------------------------")
-        return None, f"Unexpected error in processing: {str(e)}"
+        os.makedirs(self.GENERATED_CSVS_FOLDER, exist_ok=True)
 
+        # Create GUI elements
+        self.create_widgets()
 
-def handle_processing_results(csv_filepath, status_msg):
-    """
-    This function is called by app.after() and runs in the main GUI thread.
-    It updates the GUI based on the results from the background thread.
-    """
-    process_btn.configure(state="normal")  # Re-enable the button
-    password_entry.delete(0, 'end') # Clear the password field
-    if status_msg == "Success" and csv_filepath:
-        messagebox.showinfo(
-            "Success", f"CSV file generated successfully!\n\nSaved to:\n{csv_filepath}"
+    def setup_window_geometry(self, geometry_string):
+        """Center the window on the screen"""
+        # Get the geometry dimensions
+        width, height = map(int, geometry_string.split("x"))
+
+        # Get the screen dimensions
+        screen_width = self.root.winfo_screenwidth()
+        screen_height = self.root.winfo_screenheight()
+
+        # Calculate center position
+        x = (screen_width - width) // 2
+        y = (screen_height - height) // 2
+
+        # Set the geometry
+        self.root.geometry(f"{width}x{height}+{x}+{y}")
+
+    def create_widgets(self):
+        # Main container with padding
+        main_frame = ctk.CTkFrame(self.root, corner_radius=20, fg_color="transparent")
+        main_frame.grid(row=0, column=0, sticky="nsew", padx=30, pady=30)
+        main_frame.grid_columnconfigure(0, weight=1)
+
+        # Header section
+        header_frame = ctk.CTkFrame(main_frame, corner_radius=15, height=100)
+        header_frame.grid(row=0, column=0, sticky="ew", pady=(0, 30))
+        header_frame.grid_columnconfigure(0, weight=1)
+        header_frame.grid_propagate(False)
+
+        # App title with icon
+        title_label = ctk.CTkLabel(
+            header_frame,
+            text="📊 CAMS PDF Statement Processor",
+            font=ctk.CTkFont(size=24, weight="bold"),  # Reduced from 28
+            text_color=("gray10", "gray90"),
         )
-        status_message_var.set(
-            f"Status: Success! CSV saved as {os.path.basename(csv_filepath)}"
+        title_label.grid(row=0, column=0, pady=15)  # Reduced padding
+
+        subtitle_label = ctk.CTkLabel(
+            header_frame,
+            text="Convert your CAMS PDF statements to CSV format",
+            font=ctk.CTkFont(size=13),  # Reduced from 14
+            text_color=("gray40", "gray60"),
         )
-    else:
-        messagebox.showerror("Processing Error", status_msg)
-        status_message_var.set(f"Status: Error - {status_msg}")
+        subtitle_label.grid(row=1, column=0, pady=(0, 15))  # Reduced padding
 
+        # Content area
+        content_frame = ctk.CTkFrame(main_frame, corner_radius=15)
+        content_frame.grid(
+            row=1, column=0, sticky="nsew", pady=(0, 15)
+        )  # Reduced padding
+        content_frame.grid_columnconfigure(1, weight=1)
+        main_frame.grid_rowconfigure(1, weight=1)
 
-def process_pdf_action():
-    """
-    Handles the PDF processing when the button is clicked.
-    Handles the button click. Disables the button, updates status,
-    and starts the PDF processing in a new thread.
-    """
-    pdf_file_path = selected_pdf_path_var.get()
-    password_str = password_entry.get()  # Get password directly from the entry widget
-
-    if not pdf_file_path:
-        messagebox.showerror("Error", "Please select a PDF file first.")
-        status_message_var.set("Status: Error - No PDF file selected.")
-        return
-    # Treat empty password string from entry as None for the parser
-    pdf_password = password_str if password_str else None
-
-    status_message_var.set("Status: Processing PDF... Please wait.")
-    process_btn.configure(state="disabled")  # Disable button during processing
-    app.update_idletasks()  # Force GUI update to show the "Processing" message
-
-    # Create and start the background thread
-    # Pass the result handler function and its arguments to the target
-    thread = threading.Thread(
-        target=lambda: app.after(
-            0,
-            handle_processing_results,
-            *actual_pdf_processing_task(pdf_file_path, pdf_password),
+        # File selection section
+        file_section_label = ctk.CTkLabel(
+            content_frame,
+            text="📁 Select PDF Statement",
+            font=ctk.CTkFont(size=16, weight="bold"),  # Reduced from 18
+            anchor="w",
         )
-    )
-    thread.daemon = True  # Allows main program to exit even if thread is running
-    thread.start()
+        file_section_label.grid(
+            row=0, column=0, columnspan=3, sticky="w", padx=30, pady=(20, 10)
+        )  # Adjusted padding
+
+        # File path display
+        self.file_entry = ctk.CTkEntry(
+            content_frame,
+            textvariable=self.selected_file,
+            placeholder_text="No file selected...",
+            height=40,  # Reduced from 45
+            font=ctk.CTkFont(size=13),  # Increased from 12
+            corner_radius=8,
+        )
+        self.file_entry.grid(
+            row=1, column=0, columnspan=2, sticky="ew", padx=(30, 10), pady=(0, 15)
+        )
+
+        # Browse button
+        browse_button = ctk.CTkButton(
+            content_frame,
+            text="Browse",
+            command=self.browse_file,
+            width=100,
+            height=45,
+            font=ctk.CTkFont(size=12, weight="bold"),
+            corner_radius=10,
+        )
+        browse_button.grid(row=1, column=2, sticky="e", padx=(0, 30), pady=(0, 15))
+
+        # Password section
+        password_section_label = ctk.CTkLabel(
+            content_frame,
+            text="🔐 PDF Password (if required)",
+            font=ctk.CTkFont(size=16, weight="bold"),  # Reduced from 18
+            anchor="w",
+        )
+        password_section_label.grid(
+            row=2, column=0, columnspan=3, sticky="w", padx=30, pady=(15, 10)
+        )  # Adjusted padding
+
+        # Password entry
+        self.password_entry = ctk.CTkEntry(
+            content_frame,
+            textvariable=self.password,
+            placeholder_text="Enter password if PDF is protected...",
+            show="*",
+            height=40,  # Reduced from 45
+            font=ctk.CTkFont(size=13),  # Increased from 12
+            corner_radius=8,
+        )
+        self.password_entry.grid(
+            row=3, column=0, columnspan=3, sticky="ew", padx=30, pady=(0, 20)
+        )  # Reduced padding
+
+        # Process button
+        self.process_btn = ctk.CTkButton(
+            content_frame,
+            text="🔄 Process PDF & Save CSV",
+            command=self.process_pdf,
+            height=45,  # Reduced from 55
+            font=ctk.CTkFont(size=15, weight="bold"),  # Reduced from 16
+            corner_radius=10,
+            hover_color=("#1f538d", "#14375e"),
+        )
+        self.process_btn.grid(
+            row=4, column=0, columnspan=3, sticky="ew", padx=30, pady=(0, 20)
+        )  # Reduced padding
+        # Status section
+        status_frame = ctk.CTkFrame(
+            main_frame, corner_radius=15, height=105
+        )  # Increased height slightly
+        status_frame.grid(row=2, column=0, sticky="ew")
+        status_frame.grid_columnconfigure(0, weight=1)
+        status_frame.grid_propagate(False)
+
+        status_label = ctk.CTkLabel(
+            status_frame,
+            text="Status:",
+            font=ctk.CTkFont(size=14, weight="bold"),
+            anchor="w",
+            justify="left",  # Ensure left alignment
+        )
+        status_label.grid(row=0, column=0, sticky="w", padx=20, pady=(10, 5))
+
+        self.status_display = ctk.CTkLabel(
+            status_frame,
+            textvariable=self.status_text,
+            font=ctk.CTkFont(size=14),
+            anchor="w",
+            justify="left",  # Ensure left alignment
+            wraplength=700,  # Prevent text from being cut off
+            text_color=("gray30", "gray70"),
+        )
+        self.status_display.grid(row=1, column=0, sticky="w", padx=20, pady=(0, 10))
+
+    def browse_file(self):
+        """Open file dialog to select PDF file"""
+        file_path = filedialog.askopenfilename(
+            title="Select CAMS PDF Statement",
+            filetypes=[("PDF files", "*.pdf"), ("All files", "*.*")],
+            initialdir=os.path.expanduser("~"),
+        )
+
+        if file_path:
+            self.selected_file.set(file_path)
+            self.update_status(f"Selected: {Path(file_path).name}", "info")
+
+    def process_pdf(self):
+        """Process the selected PDF file"""
+        if not self.selected_file.get():
+            self.show_error("Please select a PDF file first.")
+            return
+
+        if not os.path.exists(self.selected_file.get()):
+            self.show_error("Selected file does not exist.")
+            return
+
+        # Update status to show processing
+        self.update_status("Processing PDF file...", "processing")
+        self.process_btn.configure(state="disabled")
+        self.root.update()
+
+        # Start processing in a separate thread
+        thread = threading.Thread(
+            target=self._process_pdf_thread,
+            args=(self.selected_file.get(), self.password.get() or None),
+        )
+        thread.daemon = True
+        thread.start()
+
+    def _process_pdf_thread(self, pdf_file_path, pdf_password):
+        """Background thread for PDF processing"""
+        try:
+            processed_data, status_msg = extract_transactions_from_pdf(
+                pdf_file_path, pdf_password
+            )
+
+            if status_msg == "Success" and processed_data:
+                csv_string_content = convert_to_csv_string(processed_data)
+                if not csv_string_content:
+                    self.root.after(
+                        0,
+                        self._handle_processing_error,
+                        "Failed to generate CSV content.",
+                    )
+                    return
+
+                # Generate output filename
+                now = datetime.now()
+                timestamp_str = now.strftime("%d%m%Y_%H_%M_%S")
+                base_pdf_name = os.path.splitext(os.path.basename(pdf_file_path))[0]
+                safe_base_pdf_name = "".join(
+                    c if c.isalnum() else "_" for c in base_pdf_name
+                )
+                csv_filename = f"{safe_base_pdf_name}_transactions_{timestamp_str}.csv"
+                csv_filepath = os.path.join(self.GENERATED_CSVS_FOLDER, csv_filename)
+
+                # Save CSV
+                with open(csv_filepath, "w", encoding="utf-8", newline="") as f:
+                    f.write(csv_string_content)
+
+                self.root.after(0, self._handle_processing_success, csv_filepath)
+            else:
+                self.root.after(0, self._handle_processing_error, status_msg)
+
+        except Exception as e:
+            print("--- UNEXPECTED ERROR IN PDF PROCESSING ---")
+            traceback.print_exc()
+            print("----------------------------------------")
+            self.root.after(0, self._handle_processing_error, str(e))
+
+    def _handle_processing_success(self, csv_filepath):
+        """Handle successful PDF processing"""
+        self.process_btn.configure(state="normal")
+        self.password_entry.delete(0, "end")
+        self.update_status(
+            f"✅ Success!! - CSV File saved as {os.path.basename(csv_filepath)} \n Location: {csv_filepath}",
+            "success",
+        )
+
+    def _handle_processing_error(self, error_message):
+        """Handle PDF processing error"""
+        self.process_btn.configure(state="normal")
+        self.password_entry.delete(0, "end")
+        self.show_error(error_message)
+
+    def update_status(self, message, status_type="info"):
+        """Update status message with appropriate color"""
+        self.status_text.set(message)
+
+        if status_type == "success":
+            self.status_display.configure(text_color="#00FF00")  # Bright green
+        elif status_type == "error":
+            self.status_display.configure(text_color="#FF3333")  # Bright red
+        elif status_type == "processing":
+            self.status_display.configure(text_color="#FFD700")  # Gold yellow
+        else:
+            self.status_display.configure(text_color=("gray30", "gray70"))
+
+    def show_error(self, message):
+        """Show error message and update status"""
+        self.update_status(f"❌ Error: {message}", "error")
+        messagebox.showerror("Error", message)
+
+    def run(self):
+        """Start the application"""
+        self.root.mainloop()
 
 
-# --- GUI Layout ---
-# Create a frame to hold file selection widgets neatly
-file_selection_frame = ctk.CTkFrame(master=app)
-# pack the frame:
-# pady=10: 10 pixels of vertical padding around the frame
-# padx=10: 10 pixels of horizontal padding around the frame
-# fill="x": makes the frame expand horizontally to fill available space
-file_selection_frame.pack(pady=(20, 5), padx=20, fill="x")
-
-# Create a Label for file selection
-pdf_label = ctk.CTkLabel(master=file_selection_frame, text="Select PDF Statement:")
-# pack the label within its frame:
-pdf_label.pack(side="left", padx=(0, 5))
-
-# Entry field to display the selected file path
-# state="readonly": makes the entry field not directly editable by the user
-# textvariable=selected_pdf_path_var: links this entry to the StringVar
-pdf_path_entry = ctk.CTkEntry(
-    master=file_selection_frame,
-    textvariable=selected_pdf_path_var,
-    state="readonly",
-    width=350,
-)
-# pack the entry field:
-# expand=True: allows the widget to expand if extra space is available
-pdf_path_entry.pack(side="left", expand=True, fill="x", padx=5)
-
-# Button to browse for a file
-browse_btn = ctk.CTkButton(
-    master=file_selection_frame, text="Browse...", command=browse_file
-)
-# command=browse_file: specifies the function to call when the button is clicked
-browse_btn.pack(side="left", padx=(5, 0))
-
-# --- Frame to hold the password input widgets ---
-password_frame = ctk.CTkFrame(master=app)
-password_frame.pack(pady=5, padx=20, fill="x")
-
-# Label for password input
-password_label = ctk.CTkLabel(master=password_frame, text="PDF Password (if any):")
-password_label.pack(side="left", padx=(0, 5))
-
-# Entry field for password input
-# show="*": displays asterisks instead of the actual characters typed
-password_entry = ctk.CTkEntry(master=password_frame, show="*", width=250)
-password_entry.pack(side="left", padx=5)
-# You can pre-fill it if needed, e.g., password_entry.insert(0, "default_password")
-# For now, it will be empty by default.
-
-# --Process Button ---
-process_btn = ctk.CTkButton(
-    master=app, text="Process PDF & Save CSV", command=process_pdf_action
-)
-process_btn.pack(pady=20)
-
-# --- Status Label ---
-status_label = ctk.CTkLabel(master=app, textvariable=status_message_var)
-status_label.pack(pady=(0, 10), padx=20, fill="x")
-
-
-# --- Start the Tkinter event loop ---
-# This line is essential; it keeps the window open and responsive to user interactions.
-# It should always be the last line of your GUI setup.
-app.mainloop()
+# Create and run the application
+if __name__ == "__main__":
+    app = CAMSProcessorApp()
+    app.run()
