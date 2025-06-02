@@ -19,7 +19,19 @@ venv/
 
 # Generated files
 generated_csvs/
+*.csv
+
+# PyInstaller
+build/
+dist/
 *.spec
+warn-*.txt
+*.toc
+*.pyz
+*.pkg
+xref-*.html
+base_library.zip
+localpycs/
 
 # Operating System
 .DS_Store
