@@ -67,3 +67,7 @@ python gui_app.py
 ## Note
 
 This application is designed to work with CAMS (Computer Age Management Services) consolidated account statement (CAMS and Fintech) as on 02-Jun-2025. It may not work correctly with other PDF formats.
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
