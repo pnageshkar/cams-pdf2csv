@@ -201,9 +201,16 @@ class CAMSProcessorApp:
             font=ctk.CTkFont(size=14),
             anchor="w",
             justify="left",  # Ensure left alignment
-            wraplength=700,  # Prevent text from being cut off
+            wraplength=status_frame.winfo_width() or 1,  # Initial value, will update after layout
             text_color=("gray30", "gray70"),
         )
+
+        # Make wraplength responsive to frame width
+        def update_wraplength(event=None):
+            # Subtract some padding if needed (e.g., 40px)
+            self.status_display.configure(wraplength=max(status_frame.winfo_width() - 40, 100))
+
+        status_frame.bind("<Configure>", update_wraplength)
         self.status_display.grid(row=1, column=0, sticky="w", padx=20, pady=(0, 10))
 
     def browse_file(self):
