@@ -91,6 +91,59 @@ def remove_parenthetical_parts(text):
     return text.strip()
 
 
+def extract_isin_from_text(text):
+    """
+    Extracts a valid 12-character Indian ISIN from a text string.
+    Indian mutual fund ISINs start with 'INF' and are exactly 12 alphanumeric characters.
+    Returns the ISIN string if a valid one is found, or the partial match if only a
+    partial one exists, or None if nothing is found.
+    """
+    if not text:
+        return None
+    # Look for all ISIN mentions in the text
+    matches = re.findall(r"ISIN:\s*([A-Z0-9]+)", text)
+    for match in matches:
+        if len(match) >= 12:
+            return match[:12]  # Return exactly 12 chars (trim any extras)
+    # Return partial match if found (caller can decide to keep searching)
+    if matches:
+        return matches[0]
+    return None
+
+
+def is_valid_isin(isin):
+    """Check if an ISIN is complete (12 characters for Indian ISINs starting with INF)."""
+    return isin is not None and len(isin) == 12 and isin.startswith("INF")
+
+
+def prescan_isin_lookup(pdf_path, pdf_password=""):
+    """
+    Pre-scan all pages to build a scheme-code -> ISIN lookup table.
+    This captures ISINs from pages where they appear intact (12 chars),
+    which can be used as a fallback for pages where ISINs are garbled.
+    """
+    scheme_isin_regex = re.compile(
+        r"^(?P<SchemeCode>[A-Z0-9]+)-.*?ISIN:\s*(?P<ISIN>[A-Z0-9]{12})"
+    )
+    lookup = {}
+    try:
+        with pdfplumber.open(pdf_path, password=pdf_password) as pdf:
+            for page in pdf.pages:
+                text_content = page.extract_text(
+                    x_tolerance=3, y_tolerance=3, layout=False, keep_blank_chars=True
+                )
+                if not text_content:
+                    continue
+                for line in text_content.split("\n"):
+                    line = line.strip()
+                    m = scheme_isin_regex.match(line)
+                    if m:
+                        lookup[m.group("SchemeCode")] = m.group("ISIN")
+    except Exception:
+        pass  # If pre-scan fails, we still proceed with empty lookup
+    return lookup
+
+
 # --- Core Extraction and Processing Function ---
 def extract_transactions_from_pdf(
     pdf_path, pdf_password=""
@@ -101,6 +154,9 @@ def extract_transactions_from_pdf(
 
     """
     extracted_data_raw = []
+
+    # Pre-scan to build ISIN lookup table for fallback
+    isin_lookup = prescan_isin_lookup(pdf_path, pdf_password)
 
     folio_regex = re.compile(r"^Folio No:\s*([\w/]+)")
 
@@ -135,11 +191,14 @@ def extract_transactions_from_pdf(
 
     current_folio_number = None
     current_fund_name_raw = None  # Will store the matched fund name
+    current_isin = None
+    investor_name = None
 
     # Simplified state: -1: idle, 0: folio found, expecting fund name
     fund_name_detection_state = -1
     fund_name_buffer = []
     lines_since_folio_for_fund_name = 0
+    isin_search_lines_remaining = 0  # Counter for secondary ISIN search after fund name
 
     # Check if the PDF password is valid before proceeding
     valid = is_pdf_password_valid(pdf_path, pdf_password)
@@ -164,14 +223,21 @@ def extract_transactions_from_pdf(
                     if not line:
                         continue
 
+                    if page_num == 0 and not investor_name:
+                        if "balances and valuation" in line:
+                            investor_name = line.split("balances and valuation")[
+                                0
+                            ].strip()
+
                     folio_match = folio_regex.match(line)
                     if folio_match:
                         current_folio_number = folio_match.group(1)
                         current_fund_name_raw = None  # Reset fund name
+                        current_isin = None  # Reset ISIN for new folio section
                         fund_name_buffer = []
                         fund_name_detection_state = 0  # Folio found, expect fund name
                         lines_since_folio_for_fund_name = 0
-                        # print(f"DEBUG: Folio Found: {current_folio_number}. State: {fund_name_detection_state}")
+                        isin_search_lines_remaining = 0
                         continue
 
                     # --- Simplified Fund Name Detection ---
@@ -204,11 +270,39 @@ def extract_transactions_from_pdf(
                                     current_fund_name_raw = fund_name_match.group(
                                         "FundNameCode"
                                     ).strip()
-                                    # print(f"DEBUG: Fund Name Found: '{current_fund_name_raw}' from '{combined_buffered_line}'")
+                                    current_isin = extract_isin_from_text(
+                                        combined_buffered_line
+                                    )
+                                    # If ISIN is partial, try to complete it by
+                                    # appending leading alphanumeric chars from next lines
+                                    if current_isin and not is_valid_isin(current_isin):
+                                        chars_needed = 12 - len(current_isin)
+                                        for look_ahead in range(1, 4):
+                                            if i + look_ahead < len(lines):
+                                                next_line_text = lines[
+                                                    i + look_ahead
+                                                ].strip()
+                                                # Extract leading alphanumeric chars
+                                                leading = re.match(
+                                                    r"^([A-Z0-9]+)", next_line_text
+                                                )
+                                                if leading:
+                                                    current_isin += leading.group(1)[
+                                                        :chars_needed
+                                                    ]
+                                                    if is_valid_isin(current_isin):
+                                                        break
+                                                    chars_needed = 12 - len(
+                                                        current_isin
+                                                    )
+                                    # print(f"DEBUG: Fund Name Found: '{current_fund_name_raw}' ISIN: '{current_isin}' from '{combined_buffered_line}'")
                                     fund_name_detection_state = (
                                         -1
                                     )  # Fund name found, reset state
                                     fund_name_buffer = []
+                                    # If ISIN is still missing or incomplete, search upcoming lines
+                                    if not is_valid_isin(current_isin):
+                                        isin_search_lines_remaining = 5
                                     # Continue to process this line for transactions if it's a transaction line
                                     # Or move to next line if this line was purely for fund name
                                 # else:
@@ -238,6 +332,39 @@ def extract_transactions_from_pdf(
                             and not date_pattern_start.match(line)
                         ):
                             continue
+
+                    # --- Secondary ISIN Search ---
+                    # If fund name was found but ISIN is missing/incomplete,
+                    # search subsequent non-transaction lines for ISIN
+                    if (
+                        isin_search_lines_remaining > 0
+                        and not date_pattern_start.match(line)
+                    ):
+                        isin_search_lines_remaining -= 1
+                        # Try extracting from current line
+                        candidate = extract_isin_from_text(line)
+                        if is_valid_isin(candidate):
+                            current_isin = candidate
+                            isin_search_lines_remaining = 0
+                        else:
+                            # Try concatenating with next line to recover split ISINs
+                            if i + 1 < len(lines):
+                                combined = line + lines[i + 1].strip()
+                                candidate = extract_isin_from_text(combined)
+                                if is_valid_isin(candidate):
+                                    current_isin = candidate
+                                    isin_search_lines_remaining = 0
+                        continue
+                    elif isin_search_lines_remaining > 0 and date_pattern_start.match(
+                        line
+                    ):
+                        # Stop searching once transactions begin
+                        isin_search_lines_remaining = 0
+                        # Last resort: use pre-scan lookup table
+                        if not is_valid_isin(current_isin) and current_fund_name_raw:
+                            scheme_code = current_fund_name_raw.split("-")[0]
+                            if scheme_code in isin_lookup:
+                                current_isin = isin_lookup[scheme_code]
 
                     cleaned_fund_name_for_tx = remove_parenthetical_parts(
                         current_fund_name_raw
@@ -311,9 +438,10 @@ def extract_transactions_from_pdf(
                             data = tx_match_full.groupdict()
                             extracted_data_raw.append(
                                 {
-                                    # "ISIN": current_isin, # Removed ISIN
-                                    "Fund Name": cleaned_fund_name_for_tx,
+                                    "Investor Name": investor_name,
                                     "Folio Number": current_folio_number,
+                                    "Fund Name": cleaned_fund_name_for_tx,
+                                    "ISIN": current_isin,
                                     "Date": data["Date"],
                                     "Transaction": data["Transaction"].strip(),
                                     "Amount": clean_numeric_value(data["Amount"]),
@@ -330,9 +458,10 @@ def extract_transactions_from_pdf(
                             data = tx_match_amount_only.groupdict()
                             extracted_data_raw.append(
                                 {
-                                    # "ISIN": current_isin, # Removed ISIN
-                                    "Fund Name": cleaned_fund_name_for_tx,
+                                    "Investor Name": investor_name,
                                     "Folio Number": current_folio_number,
+                                    "Fund Name": cleaned_fund_name_for_tx,
+                                    "ISIN": current_isin,
                                     "Date": data["Date"],
                                     "Transaction": data["Transaction"].strip(),
                                     "Amount": clean_numeric_value(data["Amount"]),
@@ -398,8 +527,10 @@ def convert_to_csv_string(data_list):
     # Define the fieldnames for the CSV
     # Ensure the fieldnames match the keys in the data_list dictionaries
     fieldnames = [
-        "Fund Name",
+        "Investor Name",
         "Folio Number",
+        "Fund Name",
+        "ISIN",
         "Transaction",
         "Transaction Type",
         "Date",
