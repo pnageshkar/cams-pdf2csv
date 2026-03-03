@@ -39,3 +39,11 @@ localpycs/
 # Operating System
 .DS_Store
 Thumbs.db
+
+#pdf files
+*.pdf
+
+#excel files
+*.xlsx
+#csv files
+*.csv
