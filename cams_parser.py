@@ -80,7 +80,7 @@ import re
 import csv
 from decimal import Decimal, InvalidOperation
 import io
-from typing import Optional
+from typing import Optional, Union
 import traceback
 import pdfplumber
 from pdfminer.pdfparser import PDFParser
@@ -93,7 +93,9 @@ from pdfminer.pdfpage import PDFPage
 # =============================================================================
 
 
-def is_pdf_password_valid(file_path: str, password: Optional[str]) -> Optional[bool]:
+def is_pdf_password_valid(
+    file_path_or_bytes: Union[str, io.BytesIO], password: Optional[str]
+) -> Optional[bool]:
     """
     Validate a PDF password without fully parsing the document.
 
@@ -101,7 +103,7 @@ def is_pdf_password_valid(file_path: str, password: Optional[str]) -> Optional[b
     This avoids the overhead of extracting text from all pages just to verify the password.
 
     Args:
-        file_path: Absolute or relative path to the PDF file.
+        file_path_or_bytes: Absolute/relative path to the PDF file, or a file-like byte stream.
         password: Password to test. Use empty string or None for unprotected PDFs.
 
     Returns:
@@ -110,17 +112,30 @@ def is_pdf_password_valid(file_path: str, password: Optional[str]) -> Optional[b
         None  - File is not a valid PDF or another error occurred.
     """
     try:
-        with open(file_path, "rb") as fs:
-            parser = PDFParser(fs)
-            doc = PDFDocument(parser, password=password or "")
-            # Force password validation by attempting to access the first page.
-            # PDFPasswordIncorrect is raised here if the password is wrong.
-            next(PDFPage.create_pages(doc))
-            return True
+        if isinstance(file_path_or_bytes, str):
+            fs = open(file_path_or_bytes, "rb")
+        else:
+            fs = file_path_or_bytes
+            fs.seek(0)
+
+        parser = PDFParser(fs)
+        doc = PDFDocument(parser, password=password or "")
+        # Force password validation by attempting to access the first page.
+        # PDFPasswordIncorrect is raised here if the password is wrong.
+        next(PDFPage.create_pages(doc))
+
+        if isinstance(file_path_or_bytes, str):
+            fs.close()
+        else:
+            fs.seek(0)  # Reset stream position for the actual parsing later
+
+        return True
     except PDFPasswordIncorrect:
         print("DEBUG: Incorrect password provided for PDF.")
         return False
     except Exception as e:
+        if not isinstance(file_path_or_bytes, str):
+            file_path_or_bytes.seek(0)
         print(f"DEBUG: Exception while checking PDF password: {type(e).__name__}: {e}")
         return None
 
@@ -227,7 +242,7 @@ def is_valid_isin(isin):
     return isin is not None and len(isin) == 12 and isin.startswith("INF")
 
 
-def prescan_isin_lookup(pdf_path, pdf_password=""):
+def prescan_isin_lookup(pdf_file_or_path, pdf_password=""):
     """
     Build a scheme-code → ISIN lookup table by pre-scanning all PDF pages.
 
@@ -240,7 +255,7 @@ def prescan_isin_lookup(pdf_path, pdf_password=""):
     (e.g., under different folios), and one of those occurrences may have an intact ISIN.
 
     Args:
-        pdf_path: Path to the PDF file.
+        pdf_file_or_path: Path to the PDF file, or a file-like byte stream.
         pdf_password: Password for the PDF (empty string if unprotected).
 
     Returns:
@@ -253,7 +268,7 @@ def prescan_isin_lookup(pdf_path, pdf_password=""):
     )
     lookup = {}
     try:
-        with pdfplumber.open(pdf_path, password=pdf_password) as pdf:
+        with pdfplumber.open(pdf_file_or_path, password=pdf_password) as pdf:
             for page in pdf.pages:
                 text_content = page.extract_text(
                     x_tolerance=3, y_tolerance=3, layout=False, keep_blank_chars=True
@@ -267,6 +282,10 @@ def prescan_isin_lookup(pdf_path, pdf_password=""):
                         lookup[m.group("SchemeCode")] = m.group("ISIN")
     except Exception:
         pass  # If pre-scan fails, we still proceed with empty lookup
+
+    if not isinstance(pdf_file_or_path, str):
+        pdf_file_or_path.seek(0)
+
     return lookup
 
 
@@ -275,7 +294,7 @@ def prescan_isin_lookup(pdf_path, pdf_password=""):
 # =============================================================================
 
 
-def extract_transactions_from_pdf(pdf_path, pdf_password=""):
+def extract_transactions_from_pdf(pdf_file_or_path, pdf_password=""):
     """
     Extract mutual fund transactions from a CAMS Consolidated Account Statement PDF.
 
@@ -291,7 +310,7 @@ def extract_transactions_from_pdf(pdf_path, pdf_password=""):
           (typically 2 lines after the folio line).
 
     Args:
-        pdf_path: Path to the CAMS CAS PDF file.
+        pdf_file_or_path: Path to the CAMS CAS PDF file, or a file-like byte stream.
         pdf_password: Password for the PDF. Defaults to empty string (unprotected).
 
     Returns:
@@ -302,7 +321,7 @@ def extract_transactions_from_pdf(pdf_path, pdf_password=""):
     extracted_data_raw = []
 
     # --- Layer 3 Setup: Build ISIN lookup table from a quick pre-scan ---
-    isin_lookup = prescan_isin_lookup(pdf_path, pdf_password)
+    isin_lookup = prescan_isin_lookup(pdf_file_or_path, pdf_password)
 
     # =====================================================================
     # REGEX PATTERNS
@@ -374,7 +393,7 @@ def extract_transactions_from_pdf(pdf_path, pdf_password=""):
     # PASSWORD VALIDATION
     # =====================================================================
 
-    valid = is_pdf_password_valid(pdf_path, pdf_password)
+    valid = is_pdf_password_valid(pdf_file_or_path, pdf_password)
     if valid is False:
         return None, "Incorrect password provided for PDF."
     elif valid is None:
@@ -385,7 +404,7 @@ def extract_transactions_from_pdf(pdf_path, pdf_password=""):
     # =====================================================================
 
     try:
-        with pdfplumber.open(pdf_path, password=pdf_password) as pdf:
+        with pdfplumber.open(pdf_file_or_path, password=pdf_password) as pdf:
             for page_num, page in enumerate(pdf.pages):
                 # Extract text from each page with tolerances that work well for CAMS PDFs.
                 # layout=False prevents pdfplumber from trying to reconstruct multi-column layouts,

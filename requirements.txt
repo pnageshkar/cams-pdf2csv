@@ -1,2 +1,5 @@
 customtkinter
 pdfplumber
+fastapi
+uvicorn
+python-multipart
