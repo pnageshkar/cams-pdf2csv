@@ -35,6 +35,7 @@ The application has two main files:
 
 ```
 cams_pdf2csv/
+├── api.py            # FastAPI microservice for Next.js integration
 ├── cams_parser.py    # Core PDF parsing + CSV conversion logic
 ├── gui_app.py        # CustomTkinter GUI wrapper
 ├── requirements.txt  # Python dependencies
@@ -73,6 +74,7 @@ A CustomTkinter-based desktop interface that:
 - Python 3.7+
 - [customtkinter](https://github.com/TomSchimansky/CustomTkinter) — Modern Tkinter widgets
 - [pdfplumber](https://github.com/jsvine/pdfplumber) — PDF text extraction (includes pdfminer.six)
+- [fastapi](https://fastapi.tiangolo.com/), [uvicorn](https://www.uvicorn.org/), `python-multipart` — For running the API server
 
 
 ## Installation
@@ -114,6 +116,35 @@ python gui_app.py
 2. Enter the PDF password if it is protected
 3. Click **Process PDF & Save CSV**
 4. The CSV file will be saved in the `generated_csvs/` folder
+
+### API Server Mode (For Next.js / Web Integrations)
+
+You can run the parser as a local microservice. This is the recommended approach for integrating with Node.js/Next.js applications, as it processes the PDF entirely in memory and returns a structured JSON response without touching the disk.
+
+1. Start the API server:
+   ```bash
+   uvicorn api:app --port 8000
+   ```
+2. The server provides a POST endpoint at `http://127.0.0.1:8000/parse-pdf`. 
+3. You can test it using the provided script:
+   ```bash
+   python test_fastapi.py [optional_pdf_password]
+   ```
+
+**Example Next.js Frontend Request:**
+```javascript
+const formData = new FormData();
+formData.append('file', pdfFileBlob); 
+formData.append('password', 'your-password-if-any');
+
+const res = await fetch('http://localhost:8000/parse-pdf', {
+  method: 'POST',
+  body: formData
+});
+
+const data = await res.json();
+console.log(data.transactions); 
+```
 
 ### CLI Mode (for testing)
 
