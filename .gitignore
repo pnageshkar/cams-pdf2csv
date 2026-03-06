@@ -47,3 +47,7 @@ Thumbs.db
 *.xlsx
 #csv files
 *.csv
+
+# AMFI Data Cache
+NAVAll.txt
+amfi_nav_cache.txt
