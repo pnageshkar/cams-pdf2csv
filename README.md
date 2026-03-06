@@ -10,6 +10,7 @@ These statements are generated jointly by CAMS and KFintech and consolidate an i
 - **PDF password support** for protected statements
 - **Multi-threaded processing** (GUI remains responsive during extraction)
 - **Robust ISIN extraction** using a three-layer strategy to handle PDF text garbling
+- **Automatic AMFI Fund Name Resolution**: Connects to amfiindia.com to replace the extracted PDF fund name with the official AMFI Scheme Name using the ISIN code. Warns you if any ISINs are unmatched.
 - Extracts and exports the following fields per transaction:
 
 | Column           | Description                                              |
@@ -35,6 +36,7 @@ The application has two main files:
 
 ```
 cams_pdf2csv/
+├── amfi_lookup.py    # Downloads and caches AMFI NAV data to resolve official fund names
 ├── api.py            # FastAPI microservice for Next.js integration
 ├── cams_parser.py    # Core PDF parsing + CSV conversion logic
 ├── gui_app.py        # CustomTkinter GUI wrapper
@@ -57,7 +59,9 @@ The parser uses a **state-machine approach** to process the PDF line by line:
    - **Layer 1**: Extract from fund name line + look-ahead to complete partial ISINs split across lines
    - **Layer 2**: Search up to 5 subsequent lines for `ISIN:` patterns
    - **Layer 3**: Fall back to pre-scan lookup table
-5. **Post-Processing** — Merges stamp duty into preceding transactions, removes STT rows, classifies transaction types.
+5. **Post-Processing & AMFI Lookup**:
+   - Merges stamp duty into preceding transactions, removes STT rows, classifies transaction types.
+   - Loads the AMFI `NAVAll.txt` dictionary via `amfi_lookup.py` and replaces the `Fund Name` field with the official AMFI Scheme Name. Tracks any unused/missing ISINs to alert the user.
 
 ### `gui_app.py` — GUI Application
 
