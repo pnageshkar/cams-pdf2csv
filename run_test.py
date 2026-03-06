@@ -8,8 +8,13 @@ def run_test():
     password = sys.argv[1] if len(sys.argv) > 1 else ""
 
     # We will modify cams_parser.py first, then run this.
-    data, msg = extract_transactions_from_pdf(pdf_path, password)
+    data, msg, unmatched = extract_transactions_from_pdf(pdf_path, password)
     print(msg)
+    if unmatched:
+        print(f"WARNING: {len(unmatched)} unmatched ISINs found:")
+        for u in unmatched:
+            print(f"  - {u}")
+
     if data:
         print(f"Extracted {len(data)} transactions")
         print("First 2 data items:")

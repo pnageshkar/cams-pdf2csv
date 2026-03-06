@@ -201,14 +201,17 @@ class CAMSProcessorApp:
             font=ctk.CTkFont(size=14),
             anchor="w",
             justify="left",  # Ensure left alignment
-            wraplength=status_frame.winfo_width() or 1,  # Initial value, will update after layout
+            wraplength=status_frame.winfo_width()
+            or 1,  # Initial value, will update after layout
             text_color=("gray30", "gray70"),
         )
 
         # Make wraplength responsive to frame width
         def update_wraplength(event=None):
             # Subtract some padding if needed (e.g., 40px)
-            self.status_display.configure(wraplength=max(status_frame.winfo_width() - 40, 100))
+            self.status_display.configure(
+                wraplength=max(status_frame.winfo_width() - 40, 100)
+            )
 
         status_frame.bind("<Configure>", update_wraplength)
         self.status_display.grid(row=1, column=0, sticky="w", padx=20, pady=(0, 10))
@@ -251,11 +254,15 @@ class CAMSProcessorApp:
     def _process_pdf_thread(self, pdf_file_path, pdf_password):
         """Background thread for PDF processing"""
         try:
-            processed_data, status_msg = extract_transactions_from_pdf(
+            processed_data, status_msg, unmatched_isins = extract_transactions_from_pdf(
                 pdf_file_path, pdf_password
             )
 
             if status_msg == "Success" and processed_data:
+                # Provide warning for unmatched ISINs before writing the file
+                if unmatched_isins:
+                    print("WARNING: Unmatched ISINs found:", unmatched_isins)
+
                 csv_string_content = convert_to_csv_string(processed_data)
                 if not csv_string_content:
                     self.root.after(

@@ -83,6 +83,7 @@ import io
 from typing import Optional, Union
 import traceback
 import pdfplumber
+import amfi_lookup
 from pdfminer.pdfparser import PDFParser
 from pdfminer.pdfdocument import PDFDocument, PDFPasswordIncorrect
 from pdfminer.pdfpage import PDFPage
@@ -314,9 +315,9 @@ def extract_transactions_from_pdf(pdf_file_or_path, pdf_password=""):
         pdf_password: Password for the PDF. Defaults to empty string (unprotected).
 
     Returns:
-        tuple: (data_list, status_message)
-            - On success: (list of transaction dicts, "Success")
-            - On failure: (None or [], error_message_string)
+        tuple: (data_list, status_message, unmatched_isins)
+            - On success: (list of transaction dicts, "Success", list of missing/unmatched ISINs)
+            - On failure: (None or [], error_message_string, [])
     """
     extracted_data_raw = []
 
@@ -395,9 +396,9 @@ def extract_transactions_from_pdf(pdf_file_or_path, pdf_password=""):
 
     valid = is_pdf_password_valid(pdf_file_or_path, pdf_password)
     if valid is False:
-        return None, "Incorrect password provided for PDF."
+        return None, "Incorrect password provided for PDF.", []
     elif valid is None:
-        return None, "The selected file is not a valid PDF."
+        return None, "The selected file is not a valid PDF.", []
 
     # =====================================================================
     # MAIN EXTRACTION LOOP
@@ -701,19 +702,27 @@ def extract_transactions_from_pdf(pdf_file_or_path, pdf_password=""):
     except Exception as e:
         print(f"CAUGHT GENERIC EXCEPTION: Type: {type(e)}, Message: {str(e)}")
         traceback.print_exc()
-        return [], f"An unexpected error occurred during PDF processing: {str(e)}"
+        return [], f"An unexpected error occurred during PDF processing: {str(e)}", []
 
     # =====================================================================
-    # POST-PROCESSING
+    # POST-PROCESSING & AMFI LOOKUP
     # =====================================================================
     # After extracting raw transaction rows, perform cleanup:
     #   1. Merge stamp duty amounts into the preceding transaction
     #   2. Remove STT (Securities Transaction Tax) rows (informational only)
     #   3. Classify each transaction as "Purchase" or "Redemption" based on sign
+    #   4. Replace PDF Fund Name with AMFI Scheme Name using ISIN lookup
 
     processed_data_for_csv = []
     if not extracted_data_raw:
-        return [], "No transaction data extracted from PDF."
+        return [], "No transaction data extracted from PDF.", []
+
+    # Load AMFI ISIN lookup dictionary
+    print("Loading AMFI lookup data...")
+    amfi_dict = amfi_lookup.get_isin_lookup_dictionary()
+    print(f"AMFI data loaded. {len(amfi_dict)} ISINs available.")
+
+    unmatched_isins = []
 
     i = 0
     while i < len(extracted_data_raw):
@@ -743,13 +752,25 @@ def extract_transactions_from_pdf(pdf_file_or_path, pdf_password=""):
                 transaction_type = "Redemption"
         current_row["Transaction Type"] = transaction_type
 
+        # Apply AMFI Scheme Name replacement
+        isin = current_row["ISIN"]
+        pdf_fund_name = current_row["Fund Name"]
+        if isin and isin in amfi_dict:
+            # Replace with official AMFI name
+            current_row["Fund Name"] = amfi_dict[isin]["scheme_name"]
+        else:
+            # Keep PDF name, but flag as unmatched
+            unmatched_str = isin if isin else f"Missing ISIN for '{pdf_fund_name}'"
+            if unmatched_str not in unmatched_isins:
+                unmatched_isins.append(unmatched_str)
+
         processed_data_for_csv.append(current_row)
         i += 1
 
     if not processed_data_for_csv:
-        return [], "No transaction data to write to CSV after processing."
+        return [], "No transaction data to write to CSV after processing.", []
 
-    return processed_data_for_csv, "Success"
+    return processed_data_for_csv, "Success", unmatched_isins
 
 
 # =============================================================================

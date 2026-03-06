@@ -35,13 +35,14 @@ async def parse_pdf(file: UploadFile = File(...), password: str = Form("")):
         pdf_stream = io.BytesIO(pdf_bytes)
 
         # Call the parser and pass the in-memory byte stream instead of a path
-        data, msg = extract_transactions_from_pdf(pdf_stream, password)
+        data, msg, unmatched_isins = extract_transactions_from_pdf(pdf_stream, password)
 
         if data:
             return {
                 "status": "success",
                 "message": f"Successfully extracted {len(data)} transactions",
                 "filename": file.filename,
+                "unmatched_isins": unmatched_isins,
                 "transactions": data,
             }
         else:
